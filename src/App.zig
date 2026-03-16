@@ -60,7 +60,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
         .arena_pool = undefined,
     };
 
-    app.fs_cache = try FsCache.init(allocator, config.cacheDir());
+    app.fs_cache = try FsCache.init(config.cacheDir());
 
     app.network = try Network.init(allocator, config, app.fs_cache.cache());
     errdefer app.network.deinit();

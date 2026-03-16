@@ -284,8 +284,9 @@ pub fn request(self: *Client, req: Request) !void {
     return self.processRequest(req);
 }
 
-fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
+fn serveFromCache(allocator: std.mem.Allocator, req: Request, cached: *const CachedResponse) !void {
     const response = Response.fromCached(req.ctx, cached);
+    defer cached.metadata.deinit(allocator);
 
     if (req.start_callback) |cb| {
         try cb(response);
@@ -298,15 +299,23 @@ fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
     }
 
     switch (cached.data) {
-        .file => |data| {
+        .buffer => |data| {
             if (data.len > 0) {
                 log.err(.browser, "http.cache.serve", .{ .url = req.url, .len = data.len });
                 try req.data_callback(response, data);
             }
         },
-        .bytecode => |data| {
-            if (data.len > 0) {
-                try req.data_callback(response, data);
+        .file => |file| {
+            var buf: [1024]u8 = undefined;
+            var file_reader = file.reader(&buf);
+
+            const reader = &file_reader.interface;
+            var read_buf: [1024]u8 = undefined;
+
+            while (true) {
+                const curr = try reader.readSliceShort(&read_buf);
+                if (curr == 0) break;
+                try req.data_callback(response, read_buf[0..curr]);
             }
         },
     }
@@ -315,16 +324,18 @@ fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
 }
 
 fn processRequest(self: *Client, req: Request) !void {
-    if (self.network.cache.get(req.url)) |cached| {
-        log.err(.browser, "http.cache.get", .{
-            .url = req.url,
-            .found = true,
-            .metadata = cached.metadata,
-        });
+    if (req.method == .GET) {
+        if (self.network.cache.get(self.allocator, req.url)) |cached| {
+            log.debug(.browser, "http.cache.get", .{
+                .url = req.url,
+                .found = true,
+                .metadata = cached.metadata,
+            });
 
-        return serveFromCache(req, &cached);
-    } else {
-        log.err(.browser, "http.cache.get", .{ .url = req.url, .found = false });
+            return serveFromCache(self.allocator, req, &cached);
+        } else {
+            log.debug(.browser, "http.cache.get", .{ .url = req.url, .found = false });
+        }
     }
 
     const transfer = try self.makeTransfer(req);
@@ -906,24 +917,27 @@ fn processMessages(self: *Client) !bool {
 
             var headers = &transfer.response_header.?;
 
-            self.network.cache.put(transfer.req.url, .{
-                .metadata = .{
-                    .url = transfer.req.url,
-                    .content_type = headers.contentType() orelse "application/octet-stream",
-                    .status = headers.status,
-                    .stored_at = std.time.timestamp(),
-                    .age_at_store = 0,
-                    .max_age = 3600,
-                    .etag = null,
-                    .last_modified = null,
-                    .must_revalidate = false,
-                    .no_cache = false,
-                    .immutable = false,
-                    .vary = null,
-                },
-                .data = .{ .file = transfer.body.items },
-            }) catch |err| log.warn(.http, "cache put failed", .{ .err = err });
-            log.err(.browser, "http.cache.put", .{ .url = transfer.req.url });
+            if (transfer.req.method == .GET and headers.status == 200) {
+                self.network.cache.put(
+                    transfer.req.url,
+                    .{
+                        .url = transfer.req.url,
+                        .content_type = headers.contentType() orelse "application/octet-stream",
+                        .status = headers.status,
+                        .stored_at = std.time.timestamp(),
+                        .age_at_store = 0,
+                        .max_age = 3600,
+                        .etag = null,
+                        .last_modified = null,
+                        .must_revalidate = false,
+                        .no_cache = false,
+                        .immutable = false,
+                        .vary = null,
+                    },
+                    transfer.body.items,
+                ) catch |err| log.warn(.http, "cache put failed", .{ .err = err });
+                log.debug(.browser, "http.cache.put", .{ .url = transfer.req.url });
+            }
 
             transfer.req.notification.dispatch(.http_request_done, &.{
                 .transfer = transfer,
@@ -1043,14 +1057,17 @@ pub const Response = struct {
     pub fn contentType(self: Response) ?[]const u8 {
         return switch (self.inner) {
             .transfer => |transfer| if (transfer.response_header) |*rh| rh.contentType() else null,
-            .cached => |_| "text/html",
+            .cached => |cached| cached.metadata.content_type,
         };
     }
 
     pub fn contentLength(self: Response) ?u32 {
         return switch (self.inner) {
             .transfer => |transfer| transfer.getContentLength(),
-            .cached => |cached| @intCast(cached.data.file.len),
+            .cached => |cached| switch (cached.data) {
+                .buffer => |buf| @intCast(buf.len),
+                .file => |f| @intCast(f.getEndPos() catch 0),
+            },
         };
     }
 

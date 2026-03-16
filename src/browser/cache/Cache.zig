@@ -26,8 +26,8 @@ ptr: *anyopaque,
 vtable: *const VTable,
 
 const VTable = struct {
-    get: *const fn (ptr: *anyopaque, key: []const u8) ?CachedResponse,
-    put: *const fn (ptr: *anyopaque, key: []const u8, response: CachedResponse) anyerror!void,
+    get: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, key: []const u8) ?CachedResponse,
+    put: *const fn (ptr: *anyopaque, key: []const u8, metadata: CachedMetadata, body: []const u8) anyerror!void,
 };
 
 pub fn init(ptr: anytype) Cache {
@@ -42,18 +42,13 @@ pub fn init(ptr: anytype) Cache {
     };
 }
 
-pub fn get(self: Cache, key: []const u8) ?CachedResponse {
-    return self.vtable.get(self.ptr, key);
+pub fn get(self: Cache, allocator: std.mem.Allocator, key: []const u8) ?CachedResponse {
+    return self.vtable.get(self.ptr, allocator, key);
 }
 
-pub fn put(self: Cache, key: []const u8, response: CachedResponse) !void {
-    return self.vtable.put(self.ptr, key, response);
+pub fn put(self: Cache, key: []const u8, metadata: CachedMetadata, body: []const u8) !void {
+    return self.vtable.put(self.ptr, key, metadata, body);
 }
-
-pub const CachedData = union(enum) {
-    file: []const u8,
-    bytecode: []const u8,
-};
 
 pub const CachedMetadata = struct {
     url: [:0]const u8,
@@ -76,11 +71,24 @@ pub const CachedMetadata = struct {
     // If non-null, must be incorporated into cache key.
     vary: ?[]const u8,
 
+    pub fn deinit(self: CachedMetadata, allocator: std.mem.Allocator) void {
+        allocator.free(self.url);
+        allocator.free(self.content_type);
+        if (self.etag) |e| allocator.free(e);
+        if (self.last_modified) |lm| allocator.free(lm);
+        if (self.vary) |v| allocator.free(v);
+    }
+
     pub fn isAgeStale(self: *const CachedMetadata) bool {
         const now = std.time.timestamp();
         const age = now - self.stored_at + @as(i64, @intCast(self.age_at_store));
         return age < @as(i64, @intCast(self.max_age));
     }
+};
+
+pub const CachedData = union(enum) {
+    buffer: []const u8,
+    file: std.fs.File,
 };
 
 pub const CachedResponse = struct {

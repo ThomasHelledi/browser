@@ -23,12 +23,11 @@ const CachedResponse = Cache.CachedResponse;
 
 pub const FsCache = @This();
 
-allocator: std.mem.Allocator,
 dir: std.fs.Dir,
 
 const MAX_CACHE_SIZE_BYTES = 1024 * 1024 * 1024;
 
-pub fn init(allocator: std.mem.Allocator, path: []const u8) !FsCache {
+pub fn init(path: []const u8) !FsCache {
     const cwd = std.fs.cwd();
 
     cwd.makeDir(path) catch |err| switch (err) {
@@ -37,10 +36,7 @@ pub fn init(allocator: std.mem.Allocator, path: []const u8) !FsCache {
     };
 
     const dir = try cwd.openDir(path, .{ .iterate = true });
-    return .{
-        .allocator = allocator,
-        .dir = dir,
-    };
+    return .{ .dir = dir };
 }
 
 pub fn deinit(self: *FsCache) void {
@@ -88,54 +84,65 @@ fn deserializeMetaBoolean(bytes: []const u8) !bool {
     return error.Malformed;
 }
 
-fn deserializeMeta(allocator: std.mem.Allocator, bytes: []const u8) !CachedMetadata {
-    var iter = std.mem.splitScalar(u8, bytes, '\n');
+fn deserializeMeta(allocator: std.mem.Allocator, file: std.fs.File) !CachedMetadata {
+    var file_buf: [1024]u8 = undefined;
+    var file_reader = file.reader(&file_buf);
+    const reader = &file_reader.interface;
 
-    const url = try allocator.dupeZ(u8, iter.next() orelse return error.Malformed);
-    const content_type = iter.next() orelse return error.Malformed;
+    const url = blk: {
+        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+        break :blk try allocator.dupeZ(u8, line);
+    };
+    errdefer allocator.free(url);
 
-    const status = std.fmt.parseInt(
-        u16,
-        iter.next() orelse return error.Malformed,
-        10,
-    ) catch return error.Malformed;
-    const stored_at = std.fmt.parseInt(
-        i64,
-        iter.next() orelse return error.Malformed,
-        10,
-    ) catch return error.Malformed;
-    const age_at_store = std.fmt.parseInt(
-        u64,
-        iter.next() orelse return error.Malformed,
-        10,
-    ) catch return error.Malformed;
-    const max_age = std.fmt.parseInt(
-        u64,
-        iter.next() orelse return error.Malformed,
-        10,
-    ) catch return error.Malformed;
+    const content_type = blk: {
+        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+        break :blk try allocator.dupe(u8, line);
+    };
+    errdefer allocator.free(content_type);
 
-    const etag = deserializeMetaOptionalString(
-        iter.next() orelse return error.Malformed,
-    );
+    const status = blk: {
+        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+        break :blk std.fmt.parseInt(u16, line, 10) catch return error.Malformed;
+    };
+    const stored_at = blk: {
+        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+        break :blk std.fmt.parseInt(i64, line, 10) catch return error.Malformed;
+    };
+    const age_at_store = blk: {
+        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+        break :blk std.fmt.parseInt(u64, line, 10) catch return error.Malformed;
+    };
+    const max_age = blk: {
+        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+        break :blk std.fmt.parseInt(u64, line, 10) catch return error.Malformed;
+    };
 
-    const last_modified = deserializeMetaOptionalString(
-        iter.next() orelse return error.Malformed,
-    );
+    const etag = blk: {
+        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+        break :blk if (std.mem.eql(u8, line, "null")) null else try allocator.dupe(u8, line);
+    };
+    const last_modified = blk: {
+        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+        break :blk if (std.mem.eql(u8, line, "null")) null else try allocator.dupe(u8, line);
+    };
+    const vary = blk: {
+        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+        break :blk if (std.mem.eql(u8, line, "null")) null else try allocator.dupe(u8, line);
+    };
 
-    const vary = deserializeMetaOptionalString(
-        iter.next() orelse return error.Malformed,
-    );
-
-    const must_revalidate = try deserializeMetaBoolean(
-        iter.next() orelse return error.Malformed,
-    );
-    const no_cache = try deserializeMetaBoolean(
-        iter.next() orelse return error.Malformed,
-    );
-    const immutable = try deserializeMetaBoolean(
-        iter.next() orelse return error.Malformed,
-    );
+    const must_revalidate = blk: {
+        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+        break :blk try deserializeMetaBoolean(line);
+    };
+    const no_cache = blk: {
+        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+        break :blk try deserializeMetaBoolean(line);
+    };
+    const immutable = blk: {
+        const line = try reader.takeDelimiter('\n') orelse return error.Malformed;
+        break :blk try deserializeMetaBoolean(line);
+    };
 
     return .{
         .url = url,
@@ -153,7 +160,7 @@ fn deserializeMeta(allocator: std.mem.Allocator, bytes: []const u8) !CachedMetad
     };
 }
 
-pub fn get(ptr: *anyopaque, key: []const u8) ?Cache.CachedResponse {
+pub fn get(ptr: *anyopaque, allocator: std.mem.Allocator, key: []const u8) ?Cache.CachedResponse {
     const self: *FsCache = @ptrCast(@alignCast(ptr));
     const hashed_key = hashKey(key);
 
@@ -163,13 +170,10 @@ pub fn get(ptr: *anyopaque, key: []const u8) ?Cache.CachedResponse {
     var body_path: [64 + 5]u8 = undefined;
     _ = std.fmt.bufPrint(&body_path, "{s}.body", .{hashed_key}) catch @panic("FsCache.get body path overflowed");
 
-    const meta_bytes = self.dir.readFileAlloc(
-        self.allocator,
-        &meta_path,
-        MAX_CACHE_SIZE_BYTES,
-    ) catch return null;
+    const meta_file = self.dir.openFile(&meta_path, .{ .mode = .read_only }) catch return null;
+    defer meta_file.close();
 
-    const meta = deserializeMeta(self.allocator, meta_bytes) catch {
+    const meta = deserializeMeta(allocator, meta_file) catch {
         self.dir.deleteFile(&meta_path) catch {};
         self.dir.deleteFile(&body_path) catch {};
         return null;
@@ -184,16 +188,15 @@ pub fn get(ptr: *anyopaque, key: []const u8) ?Cache.CachedResponse {
         return null;
     }
 
-    const body = self.dir.readFileAlloc(
-        self.allocator,
-        &body_path,
-        MAX_CACHE_SIZE_BYTES,
-    ) catch return null;
+    const body_file = self.dir.openFile(&body_path, .{ .mode = .read_only }) catch return null;
 
-    return .{ .metadata = meta, .data = .{ .file = body } };
+    return .{
+        .metadata = meta,
+        .data = .{ .file = body_file },
+    };
 }
 
-pub fn put(ptr: *anyopaque, key: []const u8, response: CachedResponse) !void {
+pub fn put(ptr: *anyopaque, key: []const u8, meta: CachedMetadata, body: []const u8) !void {
     const self: *FsCache = @ptrCast(@alignCast(ptr));
     const hashed_key = hashKey(key);
 
@@ -215,7 +218,7 @@ pub fn put(ptr: *anyopaque, key: []const u8, response: CachedResponse) !void {
 
         var buf: [512]u8 = undefined;
         var meta_file_writer = meta_file.writer(&buf);
-        try serializeMeta(&meta_file_writer.interface, &response.metadata);
+        try serializeMeta(&meta_file_writer.interface, &meta);
         meta_file.close();
     }
     errdefer self.dir.deleteFile(&meta_tmp_path) catch {};
@@ -236,7 +239,7 @@ pub fn put(ptr: *anyopaque, key: []const u8, response: CachedResponse) !void {
             body_file.close();
             self.dir.deleteFile(&body_tmp_path) catch {};
         }
-        try body_file.writeAll(response.data.file);
+        try body_file.writeAll(body);
         body_file.close();
     }
     errdefer self.dir.deleteFile(&body_tmp_path) catch {};
