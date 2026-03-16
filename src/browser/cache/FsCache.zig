@@ -47,11 +47,14 @@ pub fn cache(self: *FsCache) Cache {
     return Cache.init(self);
 }
 
-fn hashKey(key: []const u8) [64]u8 {
-    var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(key, &digest, .{});
-    var hex: [64]u8 = undefined;
-    _ = std.fmt.bufPrint(&hex, "{s}", .{std.fmt.bytesToHex(&digest, .lower)}) catch unreachable;
+const HASHED_KEY_LEN = 16;
+const HASHED_PATH_LEN = HASHED_KEY_LEN + 5;
+const HASHED_TMP_PATH_LEN = HASHED_PATH_LEN + 4;
+
+fn hashKey(key: []const u8) [HASHED_KEY_LEN]u8 {
+    const h = std.hash.Wyhash.hash(0, key);
+    var hex: [HASHED_KEY_LEN]u8 = undefined;
+    _ = std.fmt.bufPrint(&hex, "{x:0>16}", .{h}) catch unreachable;
     return hex;
 }
 
@@ -164,10 +167,10 @@ pub fn get(ptr: *anyopaque, allocator: std.mem.Allocator, key: []const u8) ?Cach
     const self: *FsCache = @ptrCast(@alignCast(ptr));
     const hashed_key = hashKey(key);
 
-    var meta_path: [64 + 5]u8 = undefined;
+    var meta_path: [HASHED_PATH_LEN]u8 = undefined;
     _ = std.fmt.bufPrint(&meta_path, "{s}.meta", .{hashed_key}) catch @panic("FsCache.get meta path overflowed");
 
-    var body_path: [64 + 5]u8 = undefined;
+    var body_path: [HASHED_PATH_LEN]u8 = undefined;
     _ = std.fmt.bufPrint(&body_path, "{s}.body", .{hashed_key}) catch @panic("FsCache.get body path overflowed");
 
     const meta_file = self.dir.openFile(&meta_path, .{ .mode = .read_only }) catch return null;
@@ -201,11 +204,11 @@ pub fn put(ptr: *anyopaque, key: []const u8, meta: CachedMetadata, body: []const
     const hashed_key = hashKey(key);
 
     // Write meta to a temp file, then atomically rename into place
-    var meta_path: [64 + 5]u8 = undefined;
+    var meta_path: [HASHED_PATH_LEN]u8 = undefined;
     _ = std.fmt.bufPrint(&meta_path, "{s}.meta", .{hashed_key}) catch
         @panic("FsCache.put meta path overflowed");
 
-    var meta_tmp_path: [64 + 9]u8 = undefined;
+    var meta_tmp_path: [HASHED_TMP_PATH_LEN]u8 = undefined;
     _ = std.fmt.bufPrint(&meta_tmp_path, "{s}.meta.tmp", .{hashed_key}) catch
         @panic("FsCache.put meta tmp path overflowed");
 
@@ -225,11 +228,11 @@ pub fn put(ptr: *anyopaque, key: []const u8, meta: CachedMetadata, body: []const
     try self.dir.rename(&meta_tmp_path, &meta_path);
 
     // Write body to a temp file, then atomically rename into place
-    var body_path: [64 + 5]u8 = undefined;
+    var body_path: [HASHED_PATH_LEN]u8 = undefined;
     _ = std.fmt.bufPrint(&body_path, "{s}.body", .{hashed_key}) catch
         @panic("FsCache.put body path overflowed");
 
-    var body_tmp_path: [64 + 9]u8 = undefined;
+    var body_tmp_path: [HASHED_TMP_PATH_LEN]u8 = undefined;
     _ = std.fmt.bufPrint(&body_tmp_path, "{s}.body.tmp", .{hashed_key}) catch
         @panic("FsCache.put body tmp path overflowed");
 
