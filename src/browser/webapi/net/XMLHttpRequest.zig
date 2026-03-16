@@ -369,8 +369,7 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
     }
 
     if (response.contentType()) |ct| {
-        // TODO: Check this again.
-        self._response_mime = Mime.parse(@constCast(ct)) catch |e| {
+        self._response_mime = Mime.parse(ct) catch |e| {
             log.info(.http, "invalid content type", .{
                 .content_Type = ct,
                 .err = e,

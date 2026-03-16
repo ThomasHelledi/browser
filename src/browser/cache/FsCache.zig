@@ -60,7 +60,7 @@ fn hashKey(key: []const u8) [64]u8 {
 }
 
 fn serializeMeta(writer: *std.Io.Writer, meta: *const CachedMetadata) !void {
-    try writer.print("{s}\n", .{meta.url});
+    try writer.print("{s}\n{s}\n", .{ meta.url, meta.content_type });
     try writer.print("{d}\n{d}\n{d}\n{d}\n", .{
         meta.status,
         meta.stored_at,
@@ -75,6 +75,7 @@ fn serializeMeta(writer: *std.Io.Writer, meta: *const CachedMetadata) !void {
         meta.no_cache,
         meta.immutable,
     });
+    try writer.flush();
 }
 
 fn deserializeMetaOptionalString(bytes: []const u8) ?[]const u8 {
@@ -88,11 +89,10 @@ fn deserializeMetaBoolean(bytes: []const u8) !bool {
 }
 
 fn deserializeMeta(allocator: std.mem.Allocator, bytes: []const u8) !CachedMetadata {
-    _ = allocator;
-
     var iter = std.mem.splitScalar(u8, bytes, '\n');
 
-    const url = iter.next() orelse return error.Malformed;
+    const url = try allocator.dupeZ(u8, iter.next() orelse return error.Malformed);
+    const content_type = iter.next() orelse return error.Malformed;
 
     const status = std.fmt.parseInt(
         u16,
@@ -139,6 +139,7 @@ fn deserializeMeta(allocator: std.mem.Allocator, bytes: []const u8) !CachedMetad
 
     return .{
         .url = url,
+        .content_type = content_type,
         .status = status,
         .stored_at = stored_at,
         .age_at_store = age_at_store,
@@ -168,7 +169,11 @@ pub fn get(ptr: *anyopaque, key: []const u8) ?Cache.CachedResponse {
         MAX_CACHE_SIZE_BYTES,
     ) catch return null;
 
-    const meta = deserializeMeta(self.allocator, meta_bytes) catch return null;
+    const meta = deserializeMeta(self.allocator, meta_bytes) catch {
+        self.dir.deleteFile(&meta_path) catch {};
+        self.dir.deleteFile(&body_path) catch {};
+        return null;
+    };
 
     // Ensure age is still valid.
     const now = std.time.timestamp();

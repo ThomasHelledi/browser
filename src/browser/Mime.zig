@@ -111,55 +111,44 @@ fn parseCharset(value: []const u8) error{ CharsetTooBig, Invalid }![]const u8 {
     return value;
 }
 
-pub fn parse(input: []u8) !Mime {
+pub fn parse(input: []const u8) !Mime {
     if (input.len > 255) {
         return error.TooBig;
     }
 
-    // Zig's trim API is broken. The return type is always `[]const u8`,
-    // even if the input type is `[]u8`. @constCast is safe here.
-    var normalized = @constCast(std.mem.trim(u8, input, &std.ascii.whitespace));
-    _ = std.ascii.lowerString(normalized, normalized);
+    var buf: [255]u8 = undefined;
+    const normalized = std.ascii.lowerString(&buf, std.mem.trim(u8, input, &std.ascii.whitespace));
 
     const content_type, const type_len = try parseContentType(normalized);
     if (type_len >= normalized.len) {
         return .{ .content_type = content_type };
     }
-
     const params = trimLeft(normalized[type_len..]);
-
     var charset: [41]u8 = default_charset;
     var charset_len: usize = default_charset_len;
-
     var it = std.mem.splitScalar(u8, params, ';');
     while (it.next()) |attr| {
         const i = std.mem.indexOfScalarPos(u8, attr, 0, '=') orelse continue;
         const name = trimLeft(attr[0..i]);
-
         const value = trimRight(attr[i + 1 ..]);
         if (value.len == 0) {
             continue;
         }
-
         const attribute_name = std.meta.stringToEnum(enum {
             charset,
         }, name) orelse continue;
-
         switch (attribute_name) {
             .charset => {
                 if (value.len == 0) {
                     break;
                 }
-
                 const attribute_value = parseCharset(value) catch continue;
                 @memcpy(charset[0..attribute_value.len], attribute_value);
-                // Null-terminate right after attribute value.
                 charset[attribute_value.len] = 0;
                 charset_len = attribute_value.len;
             },
         }
     }
-
     return .{
         .params = params,
         .charset = charset,

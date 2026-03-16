@@ -284,10 +284,47 @@ pub fn request(self: *Client, req: Request) !void {
     return self.processRequest(req);
 }
 
+fn serveFromCache(req: Request, cached: *const CachedResponse) !void {
+    const response = Response.fromCached(req.ctx, cached);
+
+    if (req.start_callback) |cb| {
+        try cb(response);
+    }
+
+    const proceed = try req.header_callback(response);
+    if (!proceed) {
+        req.error_callback(req.ctx, error.Abort);
+        return;
+    }
+
+    switch (cached.data) {
+        .file => |data| {
+            if (data.len > 0) {
+                log.err(.browser, "http.cache.serve", .{ .url = req.url, .len = data.len });
+                try req.data_callback(response, data);
+            }
+        },
+        .bytecode => |data| {
+            if (data.len > 0) {
+                try req.data_callback(response, data);
+            }
+        },
+    }
+
+    try req.done_callback(req.ctx);
+}
+
 fn processRequest(self: *Client, req: Request) !void {
     if (self.network.cache.get(req.url)) |cached| {
-        _ = cached;
-        unreachable;
+        log.err(.browser, "http.cache.get", .{
+            .url = req.url,
+            .found = true,
+            .metadata = cached.metadata,
+        });
+
+        return serveFromCache(req, &cached);
+    } else {
+        log.err(.browser, "http.cache.get", .{ .url = req.url, .found = false });
     }
 
     const transfer = try self.makeTransfer(req);
@@ -867,6 +904,27 @@ fn processMessages(self: *Client) !bool {
                 continue;
             };
 
+            var headers = &transfer.response_header.?;
+
+            self.network.cache.put(transfer.req.url, .{
+                .metadata = .{
+                    .url = transfer.req.url,
+                    .content_type = headers.contentType() orelse "application/octet-stream",
+                    .status = headers.status,
+                    .stored_at = std.time.timestamp(),
+                    .age_at_store = 0,
+                    .max_age = 3600,
+                    .etag = null,
+                    .last_modified = null,
+                    .must_revalidate = false,
+                    .no_cache = false,
+                    .immutable = false,
+                    .vary = null,
+                },
+                .data = .{ .file = transfer.body.items },
+            }) catch |err| log.warn(.http, "cache put failed", .{ .err = err });
+            log.err(.browser, "http.cache.put", .{ .url = transfer.req.url });
+
             transfer.req.notification.dispatch(.http_request_done, &.{
                 .transfer = transfer,
             });
@@ -985,7 +1043,7 @@ pub const Response = struct {
     pub fn contentType(self: Response) ?[]const u8 {
         return switch (self.inner) {
             .transfer => |transfer| if (transfer.response_header) |*rh| rh.contentType() else null,
-            .cached => |_| "N/A",
+            .cached => |_| "text/html",
         };
     }
 
@@ -1035,6 +1093,8 @@ pub const Transfer = struct {
     req: Request,
     url: [:0]const u8,
     client: *Client,
+
+    body: std.ArrayListUnmanaged(u8) = .empty,
     // total bytes received in the response, including the response status line,
     // the headers, and the [encoded] body.
     bytes_received: usize = 0,
@@ -1470,6 +1530,8 @@ pub const Transfer = struct {
         }
 
         const chunk = buffer[0..chunk_len];
+        transfer.body.appendSlice(transfer.arena.allocator(), chunk) catch @panic("failed to store body");
+
         transfer.req.data_callback(Response.fromTransfer(transfer), chunk) catch |err| {
             log.err(.http, "data_callback", .{ .err = err, .req = transfer });
             return Net.writefunc_error;

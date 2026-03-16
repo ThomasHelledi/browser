@@ -811,8 +811,7 @@ fn pageDataCallback(response: HttpClient.Response, data: []const u8) !void {
         // to sniff the content type
         const mime: Mime = blk: {
             if (response.contentType()) |ct| {
-                // TODO: Fix this constCast
-                break :blk try Mime.parse(@constCast(ct));
+                break :blk try Mime.parse(ct);
             }
             break :blk Mime.sniff(data);
         } orelse .unknown;
