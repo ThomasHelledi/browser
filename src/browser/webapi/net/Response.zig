@@ -139,8 +139,8 @@ pub fn getText(self: *const Response, page: *Page) !js.Promise {
 pub fn getJson(self: *Response, page: *Page) !js.Promise {
     const body = self._body orelse "";
     const local = page.js.local.?;
-    const value = local.parseJSON(body) catch {
-        return local.rejectPromise(.{ .syntax_error = "failed to parse" });
+    const value = local.parseJSON(body) catch |err| {
+        return local.rejectPromise(.syntax_error, @errorName(err));
     };
     return local.resolvePromise(try value.persist());
 }

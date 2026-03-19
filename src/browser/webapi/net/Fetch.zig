@@ -108,7 +108,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
 
 fn handleBlobUrl(url: []const u8, resolver: js.PromiseResolver, page: *Page) !js.Promise {
     const blob: *Blob = page.lookupBlobUrl(url) orelse {
-        resolver.rejectError("fetch blob error", .{ .type_error = "BlobNotFound" });
+        resolver.rejectError(.type_error, "fetch blob error", "BlobNotFound");
         return resolver.promise();
     };
 
@@ -243,7 +243,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     defer ls.deinit();
 
     // fetch() must reject with a TypeError on network errors per spec
-    ls.toLocal(self._resolver).rejectError("fetch error", .{ .type_error = "fetch error" });
+    ls.toLocal(self._resolver).rejectError(.type_error, "fetch error", @errorName(err));
 }
 
 fn httpShutdownCallback(ctx: *anyopaque) void {

@@ -1206,9 +1206,22 @@ pub fn stackTrace(self: *const Local) !?[]const u8 {
 }
 
 // == Promise Helpers ==
-pub fn rejectPromise(self: *const Local, comptime kind: js.PromiseResolver.RejectError) js.Promise {
+pub fn rejectPromise(
+    self: *const Local,
+    comptime kind: js.PromiseResolver.RejectError,
+    /// Depending on `kind`, different payloads are required.
+    payload: switch (kind) {
+        .wasm_compile_error,
+        .wasm_link_error,
+        .wasm_runtime_error,
+        .wasm_suspend_error,
+        => unreachable,
+        .dom_exception => js.PromiseResolver.DOMExceptionPayload,
+        inline else => []const u8,
+    },
+) js.Promise {
     var resolver = js.PromiseResolver.init(self);
-    resolver.rejectError("Local.rejectPromise", kind);
+    resolver.rejectError(kind, "Local.rejectPromise", payload);
     return resolver.promise();
 }
 

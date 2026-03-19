@@ -67,36 +67,48 @@ pub fn reject(self: PromiseResolver, comptime source: []const u8, value: anytype
     };
 }
 
-pub const RejectError = union(enum(u4)) {
+pub const RejectError = enum(u4) {
     /// Not to be confused with `DOMException`; this is bare `Error`.
-    generic_error: []const u8,
-    range_error: []const u8,
-    reference_error: []const u8,
-    syntax_error: []const u8,
-    type_error: []const u8,
-    wasm_compile_error: void, // TODO.
-    wasm_link_error: void, // TODO.
-    wasm_runtime_error: void, // TODO.
-    wasm_suspend_error: void, // TODO.
+    generic_error,
+    range_error,
+    reference_error,
+    syntax_error,
+    type_error,
+    wasm_compile_error, // TODO.
+    wasm_link_error, // TODO.
+    wasm_runtime_error, // TODO.
+    wasm_suspend_error, // TODO.
     /// DOM exceptions are unknown to V8, belongs to web standards.
-    dom_exception: struct { err: anyerror },
+    dom_exception,
 };
+
+pub const DOMExceptionPayload = struct { err: anyerror };
 
 /// Rejects the promise w/ an error object.
 pub fn rejectError(
     self: PromiseResolver,
-    comptime source: []const u8,
     comptime kind: RejectError,
+    comptime source: []const u8,
+    /// Depending on `kind`, different payloads are required.
+    payload: switch (kind) {
+        .wasm_compile_error,
+        .wasm_link_error,
+        .wasm_runtime_error,
+        .wasm_suspend_error,
+        => unreachable,
+        .dom_exception => DOMExceptionPayload,
+        inline else => []const u8,
+    },
 ) void {
-    const handle = switch (kind) {
-        .generic_error => |msg| self.local.isolate.createError(msg),
-        .range_error => |msg| self.local.isolate.createRangeError(msg),
-        .reference_error => |msg| self.local.isolate.createReferenceError(msg),
-        .syntax_error => |msg| self.local.isolate.createSyntaxError(msg),
-        .type_error => |msg| self.local.isolate.createTypeError(msg),
+    const handle = switch (comptime kind) {
+        .generic_error => self.local.isolate.createError(payload),
+        .range_error => self.local.isolate.createRangeError(payload),
+        .reference_error => self.local.isolate.createReferenceError(payload),
+        .syntax_error => self.local.isolate.createSyntaxError(payload),
+        .type_error => self.local.isolate.createTypeError(payload),
         // "Exceptional".
-        .dom_exception => |exception| {
-            self._reject(DOMException.fromError(exception.err) orelse unreachable) catch |reject_err| {
+        .dom_exception => {
+            self._reject(DOMException.fromError(payload.err) orelse unreachable) catch |reject_err| {
                 log.err(.bug, "rejectDomException", .{ .source = source, .err = reject_err, .persistent = false });
             };
             return;

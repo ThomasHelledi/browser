@@ -96,8 +96,8 @@ pub fn generateKey(
     key_usages: []const []const u8,
     page: *Page,
 ) !js.Promise {
-    const key_or_pair = CryptoKey.init(algorithm, extractable, key_usages, page) catch {
-        return page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.SyntaxError } });
+    const key_or_pair = CryptoKey.init(algorithm, extractable, key_usages, page) catch |err| {
+        return page.js.local.?.rejectPromise(.dom_exception, .{ .err = err });
     };
 
     return page.js.local.?.resolvePromise(key_or_pair);
@@ -112,7 +112,7 @@ pub fn exportKey(
     page: *Page,
 ) !js.Promise {
     if (!key.canExportKey()) {
-        return page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+        return page.js.local.?.rejectPromise(.dom_exception, .{ .err = error.InvalidAccessError });
     }
 
     if (std.mem.eql(u8, format, "raw")) {
@@ -124,10 +124,10 @@ pub fn exportKey(
 
     if (is_unsupported) {
         log.warn(.not_implemented, "SubtleCrypto.exportKey", .{ .format = format });
-        return page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+        return page.js.local.?.rejectPromise(.dom_exception, .{ .err = error.NotSupported });
     }
 
-    return page.js.local.?.rejectPromise(.{ .type_error = "invalid format" });
+    return page.js.local.?.rejectPromise(.type_error, "invalid format");
 }
 
 /// Derive a secret key from a master key.
@@ -149,7 +149,7 @@ pub fn deriveBits(
                 log.warn(.not_implemented, "SubtleCrypto.deriveBits", .{ .name = name });
             }
 
-            return page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+            return page.js.local.?.rejectPromise(.dom_exception, .{ .err = error.NotSupported });
         },
     };
 }
@@ -186,19 +186,19 @@ pub fn sign(
         .hmac => {
             // Verify algorithm.
             if (!algorithm.isHMAC()) {
-                return page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+                return page.js.local.?.rejectPromise(.dom_exception, .{ .err = error.InvalidAccessError });
             }
 
             // Call sign for HMAC.
             const result = key.signHMAC(data, page) catch {
-                return page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+                return page.js.local.?.rejectPromise(.dom_exception, .{ .err = error.InvalidAccessError });
             };
 
             return page.js.local.?.resolvePromise(result);
         },
         else => {
             log.warn(.not_implemented, "SubtleCrypto.sign", .{ .key_type = key._type });
-            return page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+            return page.js.local.?.rejectPromise(.dom_exception, .{ .err = error.InvalidAccessError });
         },
     };
 }
@@ -213,19 +213,19 @@ pub fn verify(
     page: *Page,
 ) !js.Promise {
     if (!algorithm.isHMAC()) {
-        return page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+        return page.js.local.?.rejectPromise(.dom_exception, .{ .err = error.InvalidAccessError });
     }
 
     return switch (key._type) {
         .hmac => key.verifyHMAC(signature, data, page),
-        else => page.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } }),
+        else => page.js.local.?.rejectPromise(.dom_exception, .{ .err = error.InvalidAccessError }),
     };
 }
 
 pub fn digest(_: *const SubtleCrypto, algorithm: []const u8, data: js.TypedArray(u8), page: *Page) !js.Promise {
     const local = page.js.local.?;
     if (algorithm.len > 10) {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+        return local.rejectPromise(.dom_exception, .{ .err = error.NotSupported });
     }
     const normalized = std.ascii.lowerString(&page.buf, algorithm);
     if (std.mem.eql(u8, normalized, "sha-1")) {
@@ -248,7 +248,7 @@ pub fn digest(_: *const SubtleCrypto, algorithm: []const u8, data: js.TypedArray
         Sha512.hash(data.values, page.buf[0..Sha512.digest_length], .{});
         return local.resolvePromise(js.ArrayBuffer{ .values = page.buf[0..Sha512.digest_length] });
     }
-    return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+    return local.rejectPromise(.dom_exception, .{ .err = error.NotSupported });
 }
 
 /// Returns the desired digest by its name.

@@ -58,12 +58,12 @@ pub const ReadResult = struct {
 
 pub fn read(self: *ReadableStreamDefaultReader, page: *Page) !js.Promise {
     const stream = self._stream orelse {
-        return page.js.local.?.rejectPromise(.{ .type_error = "Reader has been released" });
+        return page.js.local.?.rejectPromise(.type_error, "Reader has been released");
     };
 
     if (stream._state == .errored) {
-        //const err = stream._stored_error orelse "Stream errored";
-        return page.js.local.?.rejectPromise(.{ .type_error = "Stream errored" });
+        const err_message = stream._stored_error orelse "Stream errored";
+        return page.js.local.?.rejectPromise(.type_error, err_message);
     }
 
     if (stream._controller.dequeue()) |chunk| {
@@ -95,7 +95,7 @@ pub fn releaseLock(self: *ReadableStreamDefaultReader) void {
 
 pub fn cancel(self: *ReadableStreamDefaultReader, reason_: ?[]const u8, page: *Page) !js.Promise {
     const stream = self._stream orelse {
-        return page.js.local.?.rejectPromise(.{ .type_error = "Reader has been released" });
+        return page.js.local.?.rejectPromise(.type_error, "Reader has been released");
     };
 
     self.releaseLock();
