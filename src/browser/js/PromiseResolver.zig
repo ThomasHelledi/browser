@@ -20,7 +20,6 @@ const js = @import("js.zig");
 const v8 = js.v8;
 
 const log = @import("../../log.zig");
-const DOMException = @import("../webapi/DOMException.zig");
 
 const DOMException = @import("../webapi/DOMException.zig");
 
